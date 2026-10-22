@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-os.environ.setdefault("MARIADB_PYTHON_CONNECTOR", "binary")   # MariaDB's C connector; fail rather than fall back to pure Python
+os.environ["MARIADB_PYTHON_CONNECTOR"] = "binary"   # MariaDB's C connector, always: an inherited value must not select pure Python
 
 import apsw                      # SQLite through apsw, which bundles the current SQLite release
 import clickhouse_connect
@@ -356,7 +356,9 @@ class SQLite(DB):
     def __init__(s, path):
         s.path = str(path)
         s.con = apsw.Connection(s.path)                 # autocommit unless BEGIN; SQLite's default synchronous=FULL
-        s.con.execute("PRAGMA cache_size = -1048576")   # 1 GiB page cache, like PostgreSQL's and MariaDB's main cache
+        # 1 GiB page cache, like PostgreSQL's and MariaDB's main cache. It is per connection (the 8-thread test opens
+        # 8), but a cache never holds more than the file, and the file is ~95 MB, so the total stays far below 1 GiB.
+        s.con.execute("PRAGMA cache_size = -1048576")
 
     def q(s, sql): return s.con.execute(sql).fetchall()
     def x(s, sql): s.con.execute(sql)
@@ -543,6 +545,7 @@ def ops(db, m):
 
 
 def baseline(e, work, counts):
+    only()          # stop everything first, so the engine starts in a new cgroup and memory.peak covers this test only
     only(e)
     pin(client_cpus(e))
     db = open_engine(e, work)
@@ -1262,6 +1265,7 @@ def main():
     # next to the project, on real disk: /tmp is often a RAM disk, which would favour the embedded engines' files
     work = Path(tempfile.mkdtemp(prefix=".work-", dir=ROOT))
     EXT_DIR = work / "duckdb_ext"
+    remove_all()             # a container left over from an earlier run could have another image or other limits
     say(f"containers via '{RUNTIME}'; CPUs {cpus(CPU_A)} | {cpus(CPU_B)} | client {cpus(CPU_CLIENT)}")
     try:
         pin(CPU_CLIENT)
