@@ -1,32 +1,34 @@
 ==============================================================================
-RUN 2026-10-20 11:43 UTC
+RUN 2026-10-22 09:34 UTC
 orders     1,000,000 orders, 100,000 customers, 10,000 products; 3 rounds, 5 warm runs per query per
            round
-host       AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GB RAM,
+host       AMD Ryzen 7 9700X 8-Core Processor, 16 threads, 30 GiB RAM,
            Linux-7.2.4-200.fc44.x86_64-x86_64-with-glibc2.43
-           CPU governor 'performance'; RAM free at start 17.8 GB
-engines    PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2); MariaDB 11.8.9-MariaDB-ubu2404; ClickHouse
-           25.8.33.6; DuckDB 1.5.6; SQLite 3.51.2
+           CPU governor 'performance'; RAM free at start 16.4 GiB
+engines    PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2); MariaDB 13.0.2; ClickHouse 26.9.24.8; DuckDB
+           2.0.0; SQLite 3.54.1
 runtime    podman version 5.8.4 (command: sudo podman)
-caps       every engine: 2 physical cores (4 threads) and 2 GB RAM, no swap - full table below
+caps       every engine: 2 physical cores (4 threads) and 2 GiB RAM, no swap - full table below
 reading    median of the rounds ±half range; * clear winner, ~ tie within noise (details below)
 memory     containers cannot swap (memory limit = swap limit); no container ran out of memory
            Python process (the client for every test, and the engine itself for DuckDB and SQLite):
-           WARNING, pages were read back from disk or swap during: SQLite->DuckDB round 3 (1) -
-           those values are less reliable
-           other programs on the host swapped 15 pages in and out during the measurements
+           WARNING, pages were read back from disk or swap during: DuckDB round 1 (1), PG->DuckDB
+           round 1 (1), SQLite->DuckDB round 1 (8), files round 1 (11) - those values are less
+           reliable
+           other programs on the host swapped 18,213 pages in and out during the measurements
 ==============================================================================
 
 COMPUTE CAPS (the same budget for every engine)
 -----------------------------------------------
-cap                          PostgreSQL              MariaDB             ClickHouse               DuckDB               SQLite        Python client
------------------  --------------------  -------------------  ---------------------  -------------------  -------------------  -------------------
-CPUs                0-1,8-9 (container)  0-1,8-9 (container)  2-3,10-11 (container)   2-3,10-11 (pinned)     0-1,8-9 (pinned)   4-5,12-13 (pinned)
-cores               2 cores / 4 threads  2 cores / 4 threads    2 cores / 4 threads  2 cores / 4 threads  2 cores / 4 threads  2 cores / 4 threads
-RAM cap                2 GB (container)     2 GB (container)       2 GB (container)  2 GB (memory_limit)          no hard cap                    -
-swap                               none                 none                   none      n/a, in-process      n/a, in-process                    -
-threads per query  4 (parallel workers)        1 (by design)        4 (max_threads)          4 (threads)        1 (by design)                    -
-main cache          1 GB shared_buffers     1 GB buffer pool   default, inside 2 GB  inside memory_limit      1 GB cache_size                    -
+cap                          PostgreSQL              MariaDB             ClickHouse                DuckDB               SQLite        Python client
+-----------------  --------------------  -------------------  ---------------------  --------------------  -------------------  -------------------
+CPUs                0-1,8-9 (container)  0-1,8-9 (container)  2-3,10-11 (container)    2-3,10-11 (pinned)     0-1,8-9 (pinned)   4-5,12-13 (pinned)
+cores               2 cores / 4 threads  2 cores / 4 threads    2 cores / 4 threads   2 cores / 4 threads  2 cores / 4 threads  2 cores / 4 threads
+RAM cap               2 GiB (container)    2 GiB (container)      2 GiB (container)  2 GiB (memory_limit)          no hard cap                    -
+swap                               none                 none                   none       n/a, in-process      n/a, in-process                    -
+threads per query  4 (parallel workers)        1 (by design)        4 (max_threads)           4 (threads)        1 (by design)                    -
+main cache         1 GiB shared_buffers    1 GiB buffer pool  default, inside 2 GiB   inside memory_limit     1 GiB cache_size                    -
+io_uring                        allowed              allowed                allowed       n/a, in-process      n/a, in-process                    -
 Each CPU set is two whole physical cores (all their threads), read from the machine's layout.
 The client column applies while a server is measured. Embedded engines run inside the client process,
 which is then pinned to the engine's own CPUs.
@@ -40,14 +42,17 @@ data       synthetic shop, random seed 42, same CSV files loaded into every engi
            orders(id, customer_id, product_id, qty 1-5, amount, status, created_at over 3 years);
            amount = price x qty
            status mix: 50% paid, 17% shipped, 17% refunded, 17% cancelled
-fairness   every engine: 2 physical cores = 4 threads, 2 GB RAM, no swap, about 1 GB main cache
+fairness   every engine: 2 physical cores = 4 threads, 2 GiB RAM, no swap, 1 GiB main cache
            CPUs 0-1,8-9: PostgreSQL, MariaDB, SQLite; CPUs 2-3,10-11: ClickHouse, DuckDB; CPUs
            4-5,12-13: the Python client for server engines
            containers: cpuset + memory limit from the container runtime; DuckDB: threads=4,
-           memory_limit=2GB; SQLite: single-threaded, cache_size 1 GB; embedded engines run in the
+           memory_limit=2GiB; SQLite: single-threaded, cache_size 1 GiB; embedded engines run in the
            client process, pinned to their own cores
-           PostgreSQL: shared_buffers 1GB, 4 parallel workers; MariaDB: buffer pool 1GB; ClickHouse:
-           max_threads 4
+           PostgreSQL: shared_buffers 1 GiB, 4 parallel workers; MariaDB: buffer pool 1 GiB, redo
+           log 2 GiB, loads with unique_checks=0 and foreign_key_checks=0; ClickHouse: max_threads
+           4, async_insert=0 (on by default since 26.x)
+           text compares byte by byte everywhere (MariaDB utf8mb4_bin, PostgreSQL C.UTF-8);
+           containers run with seccomp unconfined so io_uring is allowed in all of them
            only the engines a test needs are running; in a pair the source and target use different
            cores
            everything runs 3 times (rounds); each round reloads the data and rotates the engine and
@@ -83,7 +88,8 @@ tests      per engine (section 1), in every round:
                  second
   single INSERT  300 one-row INSERTs, one transaction each (default durability); per second and p95
   batch INSERT   3 statements each inserting 10,000 rows; median rows per second
-  single UPDATE  200 one-row UPDATEs by primary key (ClickHouse: 30, as mutations)
+  single UPDATE  200 one-row UPDATEs by primary key (ClickHouse: 30, as mutations); n/a where the
+                 engine cannot
            per pair (section 2), in every round:
   warm-up        the 4 queries once on the source (untimed), because its container was just started
   full copy      every table copied from source to target with INSERT/CREATE TABLE ... SELECT; time
@@ -98,8 +104,12 @@ tests      per engine (section 1), in every round:
   changes        in a 200k-row copy: 1,000 rows UPDATEd and 1,000 rows DELETEd at the source, then
                  an incremental sync, then a full refresh of that table; counts how many changes the
                  copy shows
+           files (section 4), in every round: a 5,000,000-row orders CSV, queried by PostgreSQL
+           after a COPY load, by DuckDB after importing it into a table, by DuckDB directly on the
+           CSV and on a Parquet copy, and by Python's csv module; 1 first run + 2 warm runs per task
 pass rules  the answers of all 4 queries must equal PostgreSQL's on every engine, live and on
-            copies, in every round
+            copies, in every round; the file tasks must match PostgreSQL's too (exported files: same
+            row count and sum of ids)
             (text and counts exact, numbers within 0.011 or 1e-6 relative); the run fails otherwise
 reading     each value is the median of the 3 rounds; ±x% is half the min-max range as a share of
             it;
@@ -110,46 +120,64 @@ reading     each value is the median of the 3 rounds; ±x% is half the min-max r
 
 1. BASELINE - each engine on its own
 ------------------------------------
-metric                        PostgreSQL      MariaDB       ClickHouse         DuckDB       SQLite
--------------------------  -------------  -----------  ---------------  -------------  -----------
-bulk load, all tables (s)       0.46 ±0%     1.27 ±2%       0.21 ±3% *       0.40 ±1%     1.51 ±0%
-bulk load (rows/s)         2,430,899 ±0%  875,943 ±2%  5,354,167 ±3% *  2,752,369 ±1%  737,504 ±0%
-index / PK build (s)          0.44 ±1% *     1.81 ±0%              n/a            n/a     0.64 ±1%
-size of the 3 tables (MB)            133          103             25 *         37 ±0%           95
+metric                                PostgreSQL      MariaDB       ClickHouse         DuckDB       SQLite
+--------------------------------  --------------  -----------  ---------------  -------------  -----------
+bulk load, all tables (s)              0.55 ±10%     1.58 ±3%       0.25 ±2% *       0.37 ±0%     1.51 ±8%
+bulk load (rows/s)                2,028,183 ±10%  702,433 ±3%  4,406,946 ±2% *  2,995,969 ±0%  733,473 ±7%
+index / PK build (s)                 0.46 ±11% *     2.07 ±2%              n/a            n/a     0.73 ±2%
+size of the 3 tables (MB)                    133          103             27 *         37 ±0%           95
+peak memory used (MB, cap 2,147)        425 ±35%      758 ±5%         425 ±10%       434 ±12%     408 ±19%
+peak memory: containers = cgroup memory.peak during the test (includes their page cache); DuckDB and SQLite = peak resident memory of the Python process during the test (includes the Python client itself)
 
 1a. analytic queries, median ms
 -------------------------------
-metric                          PostgreSQL      MariaDB  ClickHouse      DuckDB      SQLite
-------------------------------  ----------  -----------  ----------  ----------  ----------
-Q1 revenue by month, country     341.8 ±1%  1012.4 ±15%  18.1 ±4% ~  18.7 ±1% ~   865.1 ±1%
-Q2 top 3 products per category   161.9 ±3%    639.7 ±1%    16.8 ±1%   9.7 ±0% *   451.4 ±1%
-Q3 distinct customers, avg      1041.0 ±0%   1624.5 ±2%    36.1 ±1%  32.2 ±1% *   855.1 ±0%
-Q4 recent slice by status          6.0 ±2%     19.4 ±2%     5.2 ±1%   1.5 ±3% *    11.6 ±3%
-count(*) on orders               19.98 ±1%    41.64 ±1%    0.91 ±7%    0.18 ±2%  0.03 ±3% *
+metric                          PostgreSQL     MariaDB  ClickHouse      DuckDB       SQLite
+------------------------------  ----------  ----------  ----------  ----------  -----------
+Q1 revenue by month, country     331.6 ±3%  644.6 ±29%    54.8 ±1%  12.6 ±2% *   1017.4 ±3%
+Q2 top 3 products per category  162.1 ±12%   623.0 ±1%    50.6 ±1%   5.5 ±0% *    484.1 ±5%
+Q3 distinct customers, avg      1103.0 ±3%  1375.2 ±2%    99.0 ±0%  23.8 ±0% *    906.9 ±2%
+Q4 recent slice by status         5.7 ±15%    20.3 ±3%    12.8 ±2%   1.4 ±4% *    12.7 ±13%
+count(*) on orders               19.68 ±9%   42.70 ±1%    1.06 ±5%    0.15 ±2%  0.04 ±15% *
 
 1b. analytic queries, first run ms
 ----------------------------------
-metric                          PostgreSQL      MariaDB  ClickHouse      DuckDB     SQLite
-------------------------------  ----------  -----------  ----------  ----------  ---------
-Q1 revenue by month, country     345.2 ±1%  1009.4 ±14%  18.6 ±5% ~  19.8 ±2% ~  870.5 ±1%
-Q2 top 3 products per category   163.7 ±3%    640.2 ±0%    17.0 ±1%  10.3 ±5% *  458.5 ±2%
-Q3 distinct customers, avg      1035.2 ±1%   1639.7 ±3%    36.9 ±2%  31.8 ±3% *  852.1 ±1%
-Q4 recent slice by status         10.4 ±2%     27.9 ±0%     5.9 ±2%  2.1 ±13% *   18.5 ±1%
+metric                          PostgreSQL     MariaDB  ClickHouse      DuckDB      SQLite
+------------------------------  ----------  ----------  ----------  ----------  ----------
+Q1 revenue by month, country     334.5 ±3%  704.9 ±29%    56.7 ±2%  13.8 ±4% *  1043.9 ±6%
+Q2 top 3 products per category  162.0 ±10%   646.6 ±1%    50.3 ±1%  6.2 ±10% *   464.9 ±5%
+Q3 distinct customers, avg      1196.5 ±9%  1416.3 ±2%    98.1 ±0%  24.8 ±2% *   913.8 ±5%
+Q4 recent slice by status        10.4 ±16%    27.0 ±2%   14.4 ±12%   2.1 ±6% *    18.2 ±3%
 
 1c. row-by-row work
 -------------------
-metric                             PostgreSQL      MariaDB       ClickHouse       DuckDB         SQLite
---------------------------------  -----------  -----------  ---------------  -----------  -------------
-round trip 'SELECT 1', median ms    0.012 ±0%    0.016 ±0%        0.587 ±0%    0.037 ±1%    0.001 ±2% *
-point lookup by PK, median ms       0.023 ±0%    0.038 ±1%        1.205 ±1%    0.180 ±1%    0.007 ±1% *
-  lookup minus round trip, ms       0.011 ±1%    0.022 ±1%        0.616 ±1%    0.143 ±1%    0.007 ±1% *
-point lookup by PK, p95 ms          0.030 ±5%    0.043 ±4%       1.307 ±11%    0.245 ±0%    0.009 ±2% *
-point lookups, 8 threads (per s)   44,173 ±2%   26,764 ±0%        2,539 ±2%   12,837 ±1%   68,267 ±8% *
-single-row INSERT (per s)         3,023 ±6% ~  3,171 ±1% ~        1,309 ±8%    1,713 ±1%      1,043 ±1%
-single-row INSERT, p95 ms          0.39 ±6% ~   0.37 ±2% ~        0.89 ±21%     0.64 ±2%       1.12 ±4%
-10,000-row INSERT (rows/s)        716,755 ±8%  741,771 ±4%  5,052,202 ±1% *  318,623 ±2%  2,356,909 ±2%
-single-row UPDATE by PK (per s)   2,867 ±7% ~  3,135 ±3% ~          245 ±4%    1,779 ±3%      1,054 ±1%
+metric                             PostgreSQL         MariaDB        ClickHouse       DuckDB          SQLite
+--------------------------------  -----------  --------------  ----------------  -----------  --------------
+round trip 'SELECT 1', median ms   0.014 ±14%       0.010 ±2%         0.815 ±2%    0.057 ±0%    0.001 ±32% *
+point lookup by PK, median ms      0.033 ±15%      0.017 ±21%         1.706 ±1%    0.242 ±1%    0.007 ±32% *
+  lookup minus round trip, ms      0.017 ±24%    0.007 ±50% ~         0.891 ±1%    0.185 ±1%    0.006 ±32% ~
+point lookup by PK, p95 ms         0.040 ±38%      0.021 ±24%         1.996 ±4%    0.291 ±7%    0.012 ±18% *
+point lookups, 8 threads (per s)   39,140 ±2%  142,785 ±17% *         1,623 ±1%   10,552 ±1%     85,089 ±11%
+single-row INSERT (per s)         2,693 ±9% ~     3,164 ±3% ~         1,005 ±2%    1,564 ±2%         761 ±0%
+single-row INSERT, p95 ms          0.45 ±8% ~      0.38 ±7% ~          1.19 ±4%     0.71 ±2%        1.50 ±1%
+10,000-row INSERT (rows/s)        477,795 ±9%     614,846 ±3%  4,065,793 ±11% *  103,442 ±6%  1,453,954 ±15%
+single-row UPDATE by PK (per s)   2,655 ±8% ~     3,043 ±6% ~             1 ±4%    1,666 ±3%         725 ±4%
 'lookup minus round trip' is the database's own work: servers pay a network call, embedded engines a Python call.
+
+1d. relative speed vs PostgreSQL (median of the per-round ratios; above 1.00 = faster than PostgreSQL)
+------------------------------------------------------------------------------------------------------
+test                            col-1: PostgreSQL  col-2: MariaDB  col-3: ClickHouse  col-4: DuckDB  col-5: SQLite
+------------------------------  -----------------  --------------  -----------------  -------------  -------------
+Q1 revenue by month, country                 1.00       0.52 ±18%           6.07 ±3%      26.52 ±4%       0.31 ±3%
+Q2 top 3 products per category               1.00       0.26 ±11%          3.17 ±13%     29.47 ±11%      0.33 ±17%
+Q3 distinct customers, avg                   1.00        0.80 ±1%          11.14 ±3%      46.57 ±3%       1.26 ±3%
+Q4 recent slice by status                    1.00       0.28 ±18%          0.44 ±16%      4.24 ±18%       0.45 ±3%
+count(*) on orders                           1.00        0.46 ±8%         17.85 ±13%    128.05 ±11%    573.33 ±13%
+point lookup by PK                           1.00       1.49 ±21%          0.02 ±15%      0.14 ±15%      3.49 ±28%
+point lookups, 8 threads                     1.00       3.75 ±16%           0.04 ±2%       0.27 ±2%       2.17 ±9%
+single-row INSERT                            1.00        1.13 ±8%           0.37 ±6%      0.58 ±10%       0.28 ±8%
+10,000-row INSERT                            1.00        1.29 ±6%          8.83 ±16%       0.20 ±9%       3.04 ±6%
+single-row UPDATE by PK                      1.00        1.12 ±9%          0.00 ±10%      0.63 ±11%       0.26 ±6%
+bulk load                                    1.00       0.36 ±11%           2.18 ±8%      1.47 ±10%       0.35 ±4%
 
 2. PAIRS - data moves from a source database to a target database
 
@@ -159,60 +187,60 @@ PostgreSQL -> DuckDB   (source on CPUs 0-1,8-9, target on CPUs 2-3,10-11)
 
 full copy
 ---------
-table            rows  time (s)         rows/s
-----------  ---------  --------  -------------
-customers     100,000  0.03 ±2%  3,570,815 ±2%
-products       10,000  0.00 ±2%  3,218,218 ±2%
-orders      1,000,000  0.13 ±2%  7,420,797 ±2%
-all tables             0.17 ±1%               
+table            rows   time (s)          rows/s
+----------  ---------  ---------  --------------
+customers     100,000  0.03 ±17%  3,273,173 ±14%
+products       10,000   0.00 ±6%   2,454,300 ±5%
+orders      1,000,000  0.16 ±15%  6,435,908 ±15%
+all tables             0.19 ±15%                
 
 same tests as the baseline: source, target loaded directly, target as synced copy
 ---------------------------------------------------------------------------------
 test                                       PostgreSQL (source)  DuckDB loaded directly  DuckDB synced copy  live via source
 -----------------------------------------  -------------------  ----------------------  ------------------  ---------------
-load / copy of all tables (s)                         0.46 ±0%                0.40 ±1%            0.17 ±1%              n/a
+load / copy of all tables (s)                        0.55 ±10%                0.37 ±0%           0.19 ±15%              n/a
 size of the 3 tables (MB)                                  133                  37 ±0%              15 ±1%              n/a
-Q1 revenue by month, country, median ms              341.8 ±1%                18.7 ±1%            19.7 ±2%         78.5 ±1%
-Q2 top 3 products per category, median ms            161.9 ±3%                 9.7 ±0%             9.9 ±0%         63.1 ±4%
-Q3 distinct customers, avg, median ms              1,041.0 ±0%                32.2 ±1%            32.3 ±0%         95.3 ±1%
-Q4 recent slice by status, median ms                   6.0 ±2%                 1.5 ±3%             1.4 ±2%         18.6 ±1%
-Q1 first run ms                                      345.2 ±1%                19.8 ±2%            20.7 ±1%         83.1 ±1%
-Q2 first run ms                                      163.7 ±3%                10.3 ±5%            10.4 ±0%         63.6 ±3%
-Q3 first run ms                                    1,035.2 ±1%                31.8 ±3%            34.3 ±2%         94.5 ±1%
-Q4 first run ms                                       10.4 ±2%                2.1 ±13%             2.0 ±7%         19.1 ±1%
-count(*) on orders, ms                               19.98 ±1%                0.18 ±2%            0.18 ±3%              n/a
-round trip 'SELECT 1', ms                            0.012 ±0%               0.037 ±1%           0.039 ±1%              n/a
-point lookup by id, median ms                        0.023 ±0%               0.180 ±1%           0.326 ±0%              n/a
-point lookup by id, p95 ms                           0.030 ±5%               0.245 ±0%           0.346 ±2%              n/a
-point lookups, 8 threads (per s)                    44,173 ±2%              12,837 ±1%           5,808 ±0%              n/a
-single-row INSERT (per s)                            3,023 ±6%               1,713 ±1%           1,743 ±3%              n/a
-10,000-row INSERT (rows/s)                         716,755 ±8%             318,623 ±2%         285,851 ±1%              n/a
-single-row UPDATE by id (per s)                      2,867 ±7%               1,779 ±3%           1,875 ±2%              n/a
+Q1 revenue by month, country, median ms              331.6 ±3%                12.6 ±2%           17.5 ±13%        78.1 ±16%
+Q2 top 3 products per category, median ms           162.1 ±12%                 5.5 ±0%             6.9 ±4%         66.6 ±8%
+Q3 distinct customers, avg, median ms              1,103.0 ±3%                23.8 ±0%           30.3 ±12%        98.8 ±10%
+Q4 recent slice by status, median ms                  5.7 ±15%                 1.4 ±4%             1.6 ±7%        16.8 ±16%
+Q1 first run ms                                      334.5 ±3%                13.8 ±4%           15.9 ±11%        88.1 ±11%
+Q2 first run ms                                     162.0 ±10%                6.2 ±10%            7.4 ±12%         63.9 ±9%
+Q3 first run ms                                    1,196.5 ±9%                24.8 ±2%           37.3 ±16%        109.2 ±5%
+Q4 first run ms                                      10.4 ±16%                 2.1 ±6%            2.6 ±15%        20.8 ±31%
+count(*) on orders, ms                               19.68 ±9%                0.15 ±2%            0.18 ±2%              n/a
+round trip 'SELECT 1', ms                           0.014 ±14%               0.057 ±0%           0.079 ±9%              n/a
+point lookup by id, median ms                       0.033 ±15%               0.242 ±1%           0.421 ±7%              n/a
+point lookup by id, p95 ms                          0.040 ±38%               0.291 ±7%          0.826 ±29%              n/a
+point lookups, 8 threads (per s)                    39,140 ±2%              10,552 ±1%          4,654 ±15%              n/a
+single-row INSERT (per s)                            2,693 ±9%               1,564 ±2%           1,452 ±3%              n/a
+10,000-row INSERT (rows/s)                         477,795 ±9%             103,442 ±6%         65,316 ±14%              n/a
+single-row UPDATE by id (per s)                      2,655 ±8%               1,666 ±3%           1,527 ±1%              n/a
 'synced copy' has only what the sync created: no primary key or secondary index (ClickHouse copy is sorted by id).
 'live via source' ran 2 warm runs instead of 5.
 
 copy versus source
 ------------------
-metric                                   value
-------------------------------------  --------
-speed-up, all 4 queries (x)           24.5 ±1%
-speed-up, Q1 (x)                      17.1 ±2%
-speed-up, Q2 (x)                      16.3 ±3%
-speed-up, Q3 (x)                      32.3 ±0%
-speed-up, Q4 (x)                       4.3 ±3%
-break-even (rounds of the 4 queries)  0.11 ±1%
+metric                                    value
+------------------------------------  ---------
+speed-up, all 4 queries (x)           28.1 ±17%
+speed-up, Q1 (x)                      18.8 ±19%
+speed-up, Q2 (x)                      22.9 ±15%
+speed-up, Q3 (x)                      36.3 ±18%
+speed-up, Q4 (x)                       3.5 ±19%
+break-even (rounds of the 4 queries)  0.12 ±11%
 
 incremental sync (new rows only, by id watermark)
 -------------------------------------------------
 batch            insert on source ms  sync = lag ms  target matches
 ---------------  -------------------  -------------  --------------
-1 new rows                   0.8 ±6%        7.6 ±1%      3/3 rounds
-1,000 new rows               1.5 ±1%        7.3 ±2%      3/3 rounds
-50,000 new rows             35.4 ±1%       26.7 ±3%      3/3 rounds
+1 new rows                   0.8 ±5%        8.1 ±1%      3/3 rounds
+1,000 new rows               1.5 ±5%       10.9 ±2%      3/3 rounds
+50,000 new rows            52.4 ±21%      25.7 ±19%      3/3 rounds
 
 changes to existing rows (1,000 rows updated, 1,000 rows deleted at the source), every round:
   after an incremental sync the copy shows 0/1000 updates and still holds 1000/1000 deleted rows
-  a full refresh of the 200k-row table fixes it in 0.07 ±3% s -> 1000/1000 updates, 0/1000 deleted rows left
+  a full refresh of the 200k-row table fixes it in 0.07 ±5% s -> 1000/1000 updates, 0/1000 deleted rows left
   reading the source live (federation) always shows the current rows
 answers equal to PostgreSQL's on the copy and live, all rounds: Q1 OK, Q2 OK, Q3 OK, Q4 OK
 
@@ -222,35 +250,35 @@ MariaDB -> ClickHouse   (source on CPUs 0-1,8-9, target on CPUs 2-3,10-11)
 
 full copy
 ---------
-table            rows  time (s)         rows/s
-----------  ---------  --------  -------------
-customers     100,000  0.02 ±2%  5,745,747 ±2%
-products       10,000  0.01 ±3%  1,648,866 ±3%
-orders      1,000,000  0.26 ±0%  3,783,322 ±0%
-all tables             0.29 ±0%               
+table            rows   time (s)          rows/s
+----------  ---------  ---------  --------------
+customers     100,000  0.02 ±14%  4,178,211 ±13%
+products       10,000   0.01 ±5%   1,414,872 ±5%
+orders      1,000,000   0.46 ±5%   2,175,512 ±4%
+all tables              0.49 ±5%                
 
 same tests as the baseline: source, target loaded directly, target as synced copy
 ---------------------------------------------------------------------------------
 test                                       MariaDB (source)  ClickHouse loaded directly  ClickHouse synced copy  live via source
 -----------------------------------------  ----------------  --------------------------  ----------------------  ---------------
-load / copy of all tables (s)                      1.27 ±2%                    0.21 ±3%                0.29 ±0%              n/a
-size of the 3 tables (MB)                               103                          25                      25              n/a
-Q1 revenue by month, country, median ms        1,012.4 ±15%                    18.1 ±4%                17.8 ±1%        157.0 ±0%
-Q2 top 3 products per category, median ms         639.7 ±1%                    16.8 ±1%                16.8 ±1%        139.6 ±1%
-Q3 distinct customers, avg, median ms           1,624.5 ±2%                    36.1 ±1%                36.1 ±1%        203.7 ±1%
-Q4 recent slice by status, median ms               19.4 ±2%                     5.2 ±1%                 5.2 ±2%         25.8 ±2%
-Q1 first run ms                                1,009.4 ±14%                    18.6 ±5%                18.2 ±1%        157.6 ±1%
-Q2 first run ms                                   640.2 ±0%                    17.0 ±1%                17.1 ±2%        141.1 ±1%
-Q3 first run ms                                 1,639.7 ±3%                    36.9 ±2%                37.7 ±3%        204.9 ±4%
-Q4 first run ms                                    27.9 ±0%                     5.9 ±2%                 6.3 ±7%         40.2 ±3%
-count(*) on orders, ms                            41.64 ±1%                    0.91 ±7%               0.90 ±10%              n/a
-round trip 'SELECT 1', ms                         0.016 ±0%                   0.587 ±0%               0.592 ±2%              n/a
-point lookup by id, median ms                     0.038 ±1%                   1.205 ±1%               1.209 ±2%              n/a
-point lookup by id, p95 ms                        0.043 ±4%                  1.307 ±11%               1.326 ±3%              n/a
-point lookups, 8 threads (per s)                 26,764 ±0%                   2,539 ±2%               2,514 ±1%              n/a
-single-row INSERT (per s)                         3,171 ±1%                   1,309 ±8%               1,085 ±9%              n/a
-10,000-row INSERT (rows/s)                      741,771 ±4%               5,052,202 ±1%           4,935,656 ±2%              n/a
-single-row UPDATE by id (per s)                   3,135 ±3%                     245 ±4%                 291 ±8%              n/a
+load / copy of all tables (s)                      1.58 ±3%                    0.25 ±2%                0.49 ±5%              n/a
+size of the 3 tables (MB)                               103                          27                      27              n/a
+Q1 revenue by month, country, median ms          644.6 ±29%                    54.8 ±1%                56.3 ±2%        294.8 ±3%
+Q2 top 3 products per category, median ms         623.0 ±1%                    50.6 ±1%                50.3 ±6%        179.5 ±7%
+Q3 distinct customers, avg, median ms           1,375.2 ±2%                    99.0 ±0%                99.7 ±2%        382.1 ±5%
+Q4 recent slice by status, median ms               20.3 ±3%                    12.8 ±2%               13.1 ±10%         29.9 ±2%
+Q1 first run ms                                  704.9 ±29%                    56.7 ±2%               57.3 ±14%        282.4 ±7%
+Q2 first run ms                                   646.6 ±1%                    50.3 ±1%                51.2 ±2%       207.2 ±14%
+Q3 first run ms                                 1,416.3 ±2%                    98.1 ±0%               101.2 ±1%        364.9 ±5%
+Q4 first run ms                                    27.0 ±2%                   14.4 ±12%                14.5 ±2%         53.5 ±7%
+count(*) on orders, ms                            42.70 ±1%                    1.06 ±5%               1.05 ±30%              n/a
+round trip 'SELECT 1', ms                         0.010 ±2%                   0.815 ±2%               0.814 ±2%              n/a
+point lookup by id, median ms                    0.017 ±21%                   1.706 ±1%               1.717 ±3%              n/a
+point lookup by id, p95 ms                       0.021 ±24%                   1.996 ±4%               1.968 ±8%              n/a
+point lookups, 8 threads (per s)               142,785 ±17%                   1,623 ±1%              1,612 ±11%              n/a
+single-row INSERT (per s)                         3,164 ±3%                   1,005 ±2%                 966 ±2%              n/a
+10,000-row INSERT (rows/s)                      614,846 ±3%              4,065,793 ±11%           3,326,702 ±4%              n/a
+single-row UPDATE by id (per s)                   3,043 ±6%                       1 ±4%                   1 ±4%              n/a
 'synced copy' has only what the sync created: no primary key or secondary index (ClickHouse copy is sorted by id).
 'live via source' ran 2 warm runs instead of 5.
 
@@ -258,24 +286,24 @@ copy versus source
 ------------------
 metric                                    value
 ------------------------------------  ---------
-speed-up, all 4 queries (x)            42.8 ±6%
-speed-up, Q1 (x)                      56.4 ±16%
-speed-up, Q2 (x)                       37.7 ±1%
-speed-up, Q3 (x)                       44.3 ±3%
-speed-up, Q4 (x)                        3.7 ±4%
-break-even (rounds of the 4 queries)   0.09 ±7%
+speed-up, all 4 queries (x)           11.8 ±10%
+speed-up, Q1 (x)                      11.5 ±32%
+speed-up, Q2 (x)                       12.2 ±5%
+speed-up, Q3 (x)                       13.8 ±4%
+speed-up, Q4 (x)                       1.5 ±11%
+break-even (rounds of the 4 queries)  0.20 ±12%
 
 incremental sync (new rows only, by id watermark)
 -------------------------------------------------
 batch            insert on source ms  sync = lag ms  target matches
 ---------------  -------------------  -------------  --------------
-1 new rows                   0.8 ±4%        7.2 ±1%      3/3 rounds
-1,000 new rows               3.5 ±3%        6.3 ±0%      3/3 rounds
-50,000 new rows             49.3 ±0%       20.0 ±6%      3/3 rounds
+1 new rows                   0.8 ±3%        7.8 ±6%      3/3 rounds
+1,000 new rows             16.7 ±23%        8.4 ±9%      3/3 rounds
+50,000 new rows            55.1 ±19%       31.8 ±3%      3/3 rounds
 
 changes to existing rows (1,000 rows updated, 1,000 rows deleted at the source), every round:
   after an incremental sync the copy shows 0/1000 updates and still holds 1000/1000 deleted rows
-  a full refresh of the 200k-row table fixes it in 0.07 ±2% s -> 1000/1000 updates, 0/1000 deleted rows left
+  a full refresh of the 200k-row table fixes it in 0.12 ±2% s -> 1000/1000 updates, 0/1000 deleted rows left
   reading the source live (federation) always shows the current rows
 answers equal to PostgreSQL's on the copy and live, all rounds: Q1 OK, Q2 OK, Q3 OK, Q4 OK
 
@@ -287,58 +315,58 @@ full copy
 ---------
 table            rows  time (s)         rows/s
 ----------  ---------  --------  -------------
-customers     100,000  0.02 ±2%  5,858,757 ±2%
-products       10,000  0.00 ±2%  3,790,684 ±2%
-orders      1,000,000  0.35 ±1%  2,893,400 ±1%
-all tables             0.37 ±1%               
+customers     100,000  0.02 ±1%  5,279,881 ±1%
+products       10,000  0.00 ±6%  3,502,645 ±5%
+orders      1,000,000  0.30 ±1%  3,332,287 ±1%
+all tables             0.32 ±1%               
 
 same tests as the baseline: source, target loaded directly, target as synced copy
 ---------------------------------------------------------------------------------
 test                                       SQLite (source)  DuckDB loaded directly  DuckDB synced copy  live via source
 -----------------------------------------  ---------------  ----------------------  ------------------  ---------------
-load / copy of all tables (s)                     1.51 ±0%                0.40 ±1%            0.37 ±1%              n/a
+load / copy of all tables (s)                     1.51 ±8%                0.37 ±0%            0.32 ±1%              n/a
 size of the 3 tables (MB)                               95                  37 ±0%                  15              n/a
-Q1 revenue by month, country, median ms          865.1 ±1%                18.7 ±1%            18.2 ±2%         81.9 ±2%
-Q2 top 3 products per category, median ms        451.4 ±1%                 9.7 ±0%             9.0 ±2%         47.5 ±0%
-Q3 distinct customers, avg, median ms            855.1 ±0%                32.2 ±1%            31.1 ±1%         94.6 ±0%
-Q4 recent slice by status, median ms              11.6 ±3%                 1.5 ±3%             1.5 ±3%         41.5 ±1%
-Q1 first run ms                                  870.5 ±1%                19.8 ±2%            18.7 ±2%         83.2 ±0%
-Q2 first run ms                                  458.5 ±2%                10.3 ±5%             9.7 ±0%         47.8 ±0%
-Q3 first run ms                                  852.1 ±1%                31.8 ±3%            32.5 ±2%         96.9 ±0%
-Q4 first run ms                                   18.5 ±1%                2.1 ±13%             2.2 ±3%         43.0 ±1%
-count(*) on orders, ms                            0.03 ±3%                0.18 ±2%            0.17 ±2%              n/a
-round trip 'SELECT 1', ms                        0.001 ±2%               0.037 ±1%           0.038 ±1%              n/a
-point lookup by id, median ms                    0.007 ±1%               0.180 ±1%           0.282 ±0%              n/a
-point lookup by id, p95 ms                       0.009 ±2%               0.245 ±0%           0.296 ±2%              n/a
-point lookups, 8 threads (per s)                68,267 ±8%              12,837 ±1%           8,465 ±1%              n/a
-single-row INSERT (per s)                        1,043 ±1%               1,713 ±1%           1,698 ±1%              n/a
-10,000-row INSERT (rows/s)                   2,356,909 ±2%             318,623 ±2%         305,241 ±2%              n/a
-single-row UPDATE by id (per s)                  1,054 ±1%               1,779 ±3%           1,844 ±1%              n/a
+Q1 revenue by month, country, median ms        1,017.4 ±3%                12.6 ±2%            12.2 ±2%         70.5 ±0%
+Q2 top 3 products per category, median ms        484.1 ±5%                 5.5 ±0%            5.5 ±10%         36.9 ±0%
+Q3 distinct customers, avg, median ms            906.9 ±2%                23.8 ±0%            23.4 ±1%         81.1 ±2%
+Q4 recent slice by status, median ms             12.7 ±13%                 1.4 ±4%             1.4 ±2%         38.3 ±1%
+Q1 first run ms                                1,043.9 ±6%                13.8 ±4%            12.6 ±5%         71.7 ±1%
+Q2 first run ms                                  464.9 ±5%                6.2 ±10%            7.2 ±19%         37.3 ±1%
+Q3 first run ms                                  913.8 ±5%                24.8 ±2%            26.3 ±8%         83.8 ±1%
+Q4 first run ms                                   18.2 ±3%                 2.1 ±6%             2.1 ±4%         38.7 ±1%
+count(*) on orders, ms                           0.04 ±15%                0.15 ±2%            0.16 ±2%              n/a
+round trip 'SELECT 1', ms                       0.001 ±32%               0.057 ±0%           0.057 ±1%              n/a
+point lookup by id, median ms                   0.007 ±32%               0.242 ±1%           0.314 ±4%              n/a
+point lookup by id, p95 ms                      0.012 ±18%               0.291 ±7%           0.374 ±6%              n/a
+point lookups, 8 threads (per s)               85,089 ±11%              10,552 ±1%           8,065 ±1%              n/a
+single-row INSERT (per s)                          761 ±0%               1,564 ±2%           1,553 ±2%              n/a
+10,000-row INSERT (rows/s)                  1,453,954 ±15%             103,442 ±6%          87,813 ±5%              n/a
+single-row UPDATE by id (per s)                    725 ±4%               1,666 ±3%           1,580 ±3%              n/a
 'synced copy' has only what the sync created: no primary key or secondary index (ClickHouse copy is sorted by id).
 'live via source' ran 2 warm runs instead of 5.
 
 copy versus source
 ------------------
-metric                                   value
-------------------------------------  --------
-speed-up, all 4 queries (x)           36.2 ±1%
-speed-up, Q1 (x)                      47.8 ±3%
-speed-up, Q2 (x)                      49.5 ±2%
-speed-up, Q3 (x)                      27.5 ±1%
-speed-up, Q4 (x)                       7.6 ±2%
-break-even (rounds of the 4 queries)  0.17 ±1%
+metric                                    value
+------------------------------------  ---------
+speed-up, all 4 queries (x)            57.2 ±3%
+speed-up, Q1 (x)                       83.3 ±4%
+speed-up, Q2 (x)                      88.0 ±13%
+speed-up, Q3 (x)                       38.8 ±2%
+speed-up, Q4 (x)                       9.3 ±14%
+break-even (rounds of the 4 queries)   0.13 ±2%
 
 incremental sync (new rows only, by id watermark)
 -------------------------------------------------
 batch            insert on source ms  sync = lag ms  target matches
 ---------------  -------------------  -------------  --------------
-1 new rows                   1.2 ±6%       35.0 ±1%      3/3 rounds
-1,000 new rows               1.8 ±3%      35.0 ±20%      3/3 rounds
-50,000 new rows             19.8 ±1%       52.3 ±1%      3/3 rounds
+1 new rows                   1.6 ±1%      30.9 ±27%      3/3 rounds
+1,000 new rows               2.0 ±3%       32.1 ±8%      3/3 rounds
+50,000 new rows             20.3 ±7%      49.1 ±13%      3/3 rounds
 
 changes to existing rows (1,000 rows updated, 1,000 rows deleted at the source), every round:
   after an incremental sync the copy shows 0/1000 updates and still holds 1000/1000 deleted rows
-  a full refresh of the 200k-row table fixes it in 0.09 ±1% s -> 1000/1000 updates, 0/1000 deleted rows left
+  a full refresh of the 200k-row table fixes it in 0.08 ±9% s -> 1000/1000 updates, 0/1000 deleted rows left
   reading the source live (federation) always shows the current rows
 answers equal to PostgreSQL's on the copy and live, all rounds: Q1 OK, Q2 OK, Q3 OK, Q4 OK
 
@@ -348,35 +376,35 @@ PostgreSQL -> ClickHouse   (source on CPUs 0-1,8-9, target on CPUs 2-3,10-11)
 
 full copy
 ---------
-table            rows  time (s)         rows/s
-----------  ---------  --------  -------------
-customers     100,000  0.02 ±0%  6,288,395 ±0%
-products       10,000  0.00 ±3%  2,307,741 ±4%
-orders      1,000,000  0.28 ±2%  3,543,774 ±2%
-all tables             0.30 ±2%               
+table            rows   time (s)          rows/s
+----------  ---------  ---------  --------------
+customers     100,000   0.02 ±6%   4,749,411 ±6%
+products       10,000  0.01 ±12%  1,890,842 ±10%
+orders      1,000,000   0.35 ±2%   2,824,568 ±2%
+all tables              0.38 ±2%                
 
 same tests as the baseline: source, target loaded directly, target as synced copy
 ---------------------------------------------------------------------------------
 test                                       PostgreSQL (source)  ClickHouse loaded directly  ClickHouse synced copy  live via source
 -----------------------------------------  -------------------  --------------------------  ----------------------  ---------------
-load / copy of all tables (s)                         0.46 ±0%                    0.21 ±3%                0.30 ±2%              n/a
-size of the 3 tables (MB)                                  133                          25                      25              n/a
-Q1 revenue by month, country, median ms              341.8 ±1%                    18.1 ±4%                18.2 ±1%        162.0 ±0%
-Q2 top 3 products per category, median ms            161.9 ±3%                    16.8 ±1%                17.2 ±2%        127.2 ±1%
-Q3 distinct customers, avg, median ms              1,041.0 ±0%                    36.1 ±1%                36.1 ±1%        191.5 ±3%
-Q4 recent slice by status, median ms                   6.0 ±2%                     5.2 ±1%                 5.3 ±0%         11.7 ±2%
-Q1 first run ms                                      345.2 ±1%                    18.6 ±5%                18.5 ±2%        167.8 ±0%
-Q2 first run ms                                      163.7 ±3%                    17.0 ±1%                17.1 ±1%        124.1 ±1%
-Q3 first run ms                                    1,035.2 ±1%                    36.9 ±2%                37.0 ±1%        190.3 ±1%
-Q4 first run ms                                       10.4 ±2%                     5.9 ±2%                 5.9 ±1%         24.8 ±1%
-count(*) on orders, ms                               19.98 ±1%                    0.91 ±7%                0.89 ±8%              n/a
-round trip 'SELECT 1', ms                            0.012 ±0%                   0.587 ±0%               0.589 ±0%              n/a
-point lookup by id, median ms                        0.023 ±0%                   1.205 ±1%               1.213 ±0%              n/a
-point lookup by id, p95 ms                           0.030 ±5%                  1.307 ±11%               1.317 ±2%              n/a
-point lookups, 8 threads (per s)                    44,173 ±2%                   2,539 ±2%               2,538 ±1%              n/a
-single-row INSERT (per s)                            3,023 ±6%                   1,309 ±8%               1,294 ±1%              n/a
-10,000-row INSERT (rows/s)                         716,755 ±8%               5,052,202 ±1%           4,904,170 ±2%              n/a
-single-row UPDATE by id (per s)                      2,867 ±7%                     245 ±4%                280 ±13%              n/a
+load / copy of all tables (s)                        0.55 ±10%                    0.25 ±2%                0.38 ±2%              n/a
+size of the 3 tables (MB)                                  133                          27                      27              n/a
+Q1 revenue by month, country, median ms              331.6 ±3%                    54.8 ±1%                55.6 ±4%        235.4 ±5%
+Q2 top 3 products per category, median ms           162.1 ±12%                    50.6 ±1%                49.6 ±1%        168.6 ±1%
+Q3 distinct customers, avg, median ms              1,103.0 ±3%                    99.0 ±0%                98.9 ±0%        330.4 ±4%
+Q4 recent slice by status, median ms                  5.7 ±15%                    12.8 ±2%                12.9 ±1%        14.4 ±16%
+Q1 first run ms                                      334.5 ±3%                    56.7 ±2%                56.0 ±3%       237.7 ±13%
+Q2 first run ms                                     162.0 ±10%                    50.3 ±1%                53.4 ±4%        196.6 ±9%
+Q3 first run ms                                    1,196.5 ±9%                    98.1 ±0%                99.2 ±1%        326.7 ±9%
+Q4 first run ms                                      10.4 ±16%                   14.4 ±12%                14.5 ±3%         37.6 ±8%
+count(*) on orders, ms                               19.68 ±9%                    1.06 ±5%                1.04 ±5%              n/a
+round trip 'SELECT 1', ms                           0.014 ±14%                   0.815 ±2%               0.810 ±1%              n/a
+point lookup by id, median ms                       0.033 ±15%                   1.706 ±1%               1.705 ±1%              n/a
+point lookup by id, p95 ms                          0.040 ±38%                   1.996 ±4%               1.951 ±7%              n/a
+point lookups, 8 threads (per s)                    39,140 ±2%                   1,623 ±1%               1,433 ±7%              n/a
+single-row INSERT (per s)                            2,693 ±9%                   1,005 ±2%                 966 ±9%              n/a
+10,000-row INSERT (rows/s)                         477,795 ±9%              4,065,793 ±11%          3,359,375 ±17%              n/a
+single-row UPDATE by id (per s)                      2,655 ±8%                       1 ±4%                  1 ±15%              n/a
 'synced copy' has only what the sync created: no primary key or secondary index (ClickHouse copy is sorted by id).
 'live via source' ran 2 warm runs instead of 5.
 
@@ -384,38 +412,80 @@ copy versus source
 ------------------
 metric                                   value
 ------------------------------------  --------
-speed-up, all 4 queries (x)           20.3 ±1%
-speed-up, Q1 (x)                      18.9 ±2%
-speed-up, Q2 (x)                       9.7 ±3%
-speed-up, Q3 (x)                      29.0 ±1%
-speed-up, Q4 (x)                       1.1 ±2%
-break-even (rounds of the 4 queries)  0.21 ±2%
+speed-up, all 4 queries (x)            7.5 ±4%
+speed-up, Q1 (x)                       6.0 ±7%
+speed-up, Q2 (x)                      3.3 ±11%
+speed-up, Q3 (x)                      11.2 ±3%
+speed-up, Q4 (x)                      0.4 ±15%
+break-even (rounds of the 4 queries)  0.27 ±3%
 
 incremental sync (new rows only, by id watermark)
 -------------------------------------------------
 batch            insert on source ms  sync = lag ms  target matches
 ---------------  -------------------  -------------  --------------
-1 new rows                  1.0 ±22%        5.4 ±8%      3/3 rounds
-1,000 new rows               1.6 ±4%       4.1 ±12%      3/3 rounds
-50,000 new rows            36.2 ±14%       19.3 ±3%      3/3 rounds
+1 new rows                  1.1 ±68%        6.1 ±6%      3/3 rounds
+1,000 new rows              1.9 ±11%        4.7 ±6%      3/3 rounds
+50,000 new rows             41.3 ±5%      29.4 ±12%      3/3 rounds
 
 changes to existing rows (1,000 rows updated, 1,000 rows deleted at the source), every round:
   after an incremental sync the copy shows 0/1000 updates and still holds 1000/1000 deleted rows
-  a full refresh of the 200k-row table fixes it in 0.07 ±2% s -> 1000/1000 updates, 0/1000 deleted rows left
+  a full refresh of the 200k-row table fixes it in 0.10 ±12% s -> 1000/1000 updates, 0/1000 deleted rows left
   reading the source live (federation) always shows the current rows
 answers equal to PostgreSQL's on the copy and live, all rounds: Q1 OK, Q2 OK, Q3 OK, Q4 OK
 
 
 3. PAIR SUMMARY
 ---------------
-pair                            PG->DuckDB   Maria->CH  SQLite->DuckDB      PG->CH
-------------------------------  ----------  ----------  --------------  ----------
-full copy, all tables (s)       0.17 ±1% *    0.29 ±0%        0.37 ±1%    0.30 ±2%
-4 queries, copy vs source (x)     24.5 ±1%  42.8 ±6% *        36.2 ±1%    20.3 ±1%
-break-even (query rounds)         0.11 ±1%  0.09 ±7% *        0.17 ±1%    0.21 ±2%
-lag for 1,000 new rows (ms)        7.3 ±2%     6.3 ±0%       35.0 ±20%  4.1 ±12% *
-updates seen by sync (of 1000)           0           0               0           0
-deleted rows left (of 1000)           1000        1000            1000        1000
+pair                             PG->DuckDB  Maria->CH  SQLite->DuckDB     PG->CH
+------------------------------  -----------  ---------  --------------  ---------
+full copy, all tables (s)       0.19 ±15% *   0.49 ±5%        0.32 ±1%   0.38 ±2%
+4 queries, copy vs source (x)     28.1 ±17%  11.8 ±10%      57.2 ±3% *    7.5 ±4%
+break-even (query rounds)       0.12 ±11% ~  0.20 ±12%      0.13 ±2% ~   0.27 ±3%
+lag for 1,000 new rows (ms)        10.9 ±2%    8.4 ±9%        32.1 ±8%  4.7 ±6% *
+updates seen by sync (of 1000)            0          0               0          0
+deleted rows left (of 1000)            1000       1000            1000       1000
+
+
+4. FILES - analysing a CSV file directly, the way an application might use DuckDB next to its main database
+
+preparation
+-----------
+step                                            value
+------------------------------------------  ---------
+CSV file (MB)                                     274
+load the CSV into PostgreSQL (s)             2.58 ±1%
+import the CSV into a DuckDB table (s)      0.57 ±13%
+convert the CSV to Parquet with DuckDB (s)  0.48 ±15%
+Parquet file (MB)                             116 ±0%
+
+the three tasks, median ms
+--------------------------
+task                    PostgreSQL (after load)  DuckDB table (after import)  DuckDB on the CSV  DuckDB on Parquet  Python csv module
+----------------------  -----------------------  ---------------------------  -----------------  -----------------  -----------------
+F1 filter + aggregate                 137.3 ±0%                    7.1 ±9% *         272.1 ±15%          19.4 ±12%        2,066.8 ±5%
+F2 top 10 customers                   784.4 ±1%                   30.0 ±7% *         241.1 ±12%           49.1 ±8%        2,477.1 ±7%
+F3 filter + export CSV                309.7 ±4%                  43.2 ±11% *         363.4 ±14%           65.7 ±5%        1,920.8 ±7%
+all three                           1,233.1 ±1%                   80.3 ±9% *         867.5 ±13%          134.2 ±7%        6,385.5 ±6%
+
+the three tasks, first run ms
+-----------------------------
+task                    PostgreSQL (after load)  DuckDB table (after import)  DuckDB on the CSV  DuckDB on Parquet  Python csv module
+----------------------  -----------------------  ---------------------------  -----------------  -----------------  -----------------
+F1 filter + aggregate                 151.2 ±0%                   7.0 ±35% *         287.7 ±13%          22.0 ±12%        2,045.9 ±6%
+F2 top 10 customers                   795.7 ±2%                   32.7 ±9% *         247.9 ±11%           49.8 ±4%       2,557.9 ±10%
+F3 filter + export CSV                297.2 ±3%                  45.4 ±17% *         360.3 ±14%           60.7 ±3%       1,888.4 ±10%
+
+relative speed vs PostgreSQL (after load), all three tasks; above 1.00 = faster
+-------------------------------------------------------------------------------
+way                              value
+---------------------------  ---------
+DuckDB table (after import)  14.92 ±9%
+DuckDB on the CSV            1.38 ±11%
+DuckDB on Parquet             9.13 ±5%
+Python csv module             0.19 ±7%
+PostgreSQL and the DuckDB table need the load or import above first; DuckDB on the CSV and on Parquet does not.
+F3 writes the matching rows to a new CSV file. The Python way reads the CSV row by row with float arithmetic, standing in for parsing the file in application code.
+answers equal to PostgreSQL's, all rounds: DuckDB table (after import) OK, DuckDB on the CSV OK, DuckDB on Parquet OK, Python csv module OK
 
 answers identical across all engines, all queries, all rounds: YES
 
@@ -423,8 +493,10 @@ NOTES
 - one machine, one synthetic data set; the client is Python, which adds the same kind of overhead to every engine
 - embedded engines share their 4 CPUs with the Python code calling them; that is the real cost of running in-process
 - the 8-thread test is limited by Python's GIL for embedded engines more than for servers
-- loads: PostgreSQL COPY, MariaDB LOAD DATA, ClickHouse CSV insert, DuckDB COPY, SQLite executemany in Python
+- loads: PostgreSQL COPY, MariaDB LOAD DATA (bulk path), ClickHouse CSV insert, DuckDB COPY, SQLite executemany in Python
+- clients: psycopg (libpq), MariaDB Connector/Python with its C extension, clickhouse-connect (HTTP); DuckDB and SQLite through their Python modules
 - indexes: PK plus indexes on orders(customer_id) and orders(created_at) in PostgreSQL, MariaDB, SQLite; DuckDB PK only; ClickHouse sorted by id
 - single-row writes use each engine's default durability, one transaction per row; ClickHouse updates are mutations
+- ClickHouse 26 enables async_insert by default, which makes each client INSERT wait for a buffer flush (about 50 ms measured here); the benchmark turns it off so every engine's INSERT is finished when it returns
 - syncs are plain INSERT ... SELECT by id watermark through DuckDB ATTACH or ClickHouse database engines (PostgreSQL/MySQL), no change-data-capture
 
