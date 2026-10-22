@@ -16,6 +16,7 @@ Env       LAB_ORDERS (rows in orders, default 1000000), LAB_RUNS (warm query run
 import copy
 import csv
 import gc
+import hashlib
 import os
 import platform
 import random
@@ -706,12 +707,14 @@ def make_file(path, n):
 
 
 def export_summary(path):
-    """(rows, sum of ids) of an exported CSV, read back untimed so every way can be checked the same way."""
-    n = total = 0
+    """(rows, SHA-256 of every field of every row) of an exported CSV, read back untimed, so every way is checked
+    the same way. Numbers are normalised first (amount in whole cents), so only real differences change the digest."""
+    n, h = 0, hashlib.sha256()
     with open(path, newline="") as f:
         for r in csv.reader(f):
-            n, total = n + 1, total + int(r[0])
-    return [(float(n), float(total))]
+            n += 1
+            h.update(f"{int(r[0])}|{int(r[1])}|{int(r[2])}|{int(r[3])}|{round(float(r[4]) * 100)}|{r[5]}|{r[6][:19]}\n".encode())
+    return [(float(n), h.hexdigest())]
 
 
 def python_task(task, path, out):
@@ -910,7 +913,7 @@ def spec(counts):
           " by DuckDB after importing it into a table, by DuckDB directly on the CSV and on a Parquet copy, and by Python's csv"
           f" module; 1 first run + {FILE_RUNS} warm runs per task",
           "pass rules  the answers of all 4 queries must equal PostgreSQL's on every engine, live and on copies, in every round;"
-          " the file tasks must match PostgreSQL's too (exported files: same row count and sum of ids)",
+          " the file tasks must match PostgreSQL's too (exported files: same row count and a SHA-256 over every field)",
           "            (text and counts exact, numbers within 0.011 or 1e-6 relative); the run fails otherwise",
           f"reading     each value is the median of the {ROUNDS} rounds; ±x% is half the min-max range as a share of it;",
           "            * = clear winner: its range overlaps no other value's range; ~ = the best values overlap, a tie within",
