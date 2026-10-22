@@ -12,7 +12,7 @@ From one run on an AMD Ryzen 7 9700X with 1,000,000 orders, 3 rounds. Ratios are
 * **Small reads and writes:** MariaDB led concurrent point lookups (3.75x PostgreSQL). PostgreSQL and MariaDB tied on single-row inserts and updates. SQLite had the fastest single lookup, since it has no network round trip. ClickHouse managed about 1 single-row UPDATE per second (see [ClickHouse 26.9](#clickhouse-269)).
 * **Pairs:** copying the data from a row store into DuckDB or ClickHouse took 0.19 to 0.49 s and paid for itself within the first round of queries. But a simple sync never saw updates or deletes.
 * **Files:** on a 274 MB CSV, DuckDB querying the file directly was 1.38x faster than PostgreSQL after loading it, and needed no load (PostgreSQL's took 2.58 s). After a 0.57 s import into a DuckDB table it was 14.92x faster, and plain Python was 0.19x.
-* **Correctness and limits:** every engine returned the same answers as PostgreSQL in every round. No engine used more than 758 MB of its 2 GiB.
+* **Correctness and limits:** every engine returned the same answers as PostgreSQL in every round. In the baseline tests, no engine used more than 758 MB of its 2 GiB budget (peak memory is measured there only, not in the pair and file tests).
 
 ## Builds, configuration and hardware
 
@@ -35,10 +35,10 @@ From one run on an AMD Ryzen 7 9700X with 1,000,000 orders, 3 rounds. Ratios are
 
 Python 3.14.7 runs the client. Every version was the latest release on 22 October 2026. The only exception is the MariaDB connector, where 2.0.0rc2 is the newest build and 1.1.14 the newest stable. The stable one needs MariaDB's C library installed system-wide, while the release candidate ships it inside the package.
 
-**The same budget for every engine**
+**The same nominal budget for every engine**
 
 * **CPU:** 2 physical cores (4 threads) each, pinned, so no other part of the test shares them. In a pair, the source and the target are on different cores. The Python client gets 2 more cores of its own while it measures a server. The script reads the CPU layout itself (`lscpu`) and needs at least 6 physical cores.
-* **Memory:** 2 GiB each, no swap: `--memory 2g --memory-swap 2g` for the containers and `memory_limit=2GiB` for DuckDB. The main cache is 1 GiB: PostgreSQL `shared_buffers`, the MariaDB buffer pool, SQLite `cache_size` (per connection; the 8-thread test opens 8, but each can only cache the ~95 MB file). SQLite runs inside the Python process and can't be capped. The report measures every engine's peak memory instead (408 to 758 MB here).
+* **Memory:** a 2 GiB budget each, no swap. It is a hard cap only for the three containers (`--memory 2g --memory-swap 2g`). DuckDB's `memory_limit=2GiB` limits its buffer manager, not the whole Python process, and SQLite has no cap. The main cache is 1 GiB: PostgreSQL `shared_buffers`, the MariaDB buffer pool, SQLite `cache_size` (per connection; the 8-thread test opens 8, but each can only cache the ~95 MB file). The report measures every engine's peak memory in the baseline tests instead (408 to 758 MB here).
 * **Threads per query:** at most 4 (PostgreSQL parallel workers, ClickHouse `max_threads`, DuckDB `threads`). MariaDB with InnoDB and SQLite run each query on one thread by design.
 * **Text:** compared byte by byte everywhere (MariaDB `utf8mb4_bin`, PostgreSQL `C.UTF-8`, the others by default). `status` is plain text in every engine rather than an engine-specific enum.
 * **Loading:** each engine's fastest native path. PostgreSQL `COPY`, MariaDB `LOAD DATA` with `unique_checks=0` and `foreign_key_checks=0` and a 2 GiB redo log, ClickHouse CSV insert, DuckDB `COPY`, SQLite `executemany` in one transaction.
@@ -115,7 +115,7 @@ The absolute values, median of 3 rounds:
 | bulk load, all tables (s) | 0.55 | 1.58 | 0.25 | 0.37 | 1.51 |
 | index and key build (s) | 0.46 | 2.07 | - | - | 0.73 |
 | size of the 3 tables (MB) | 133 | 103 | 27 | 37 | 95 |
-| peak memory used (MB, cap 2,147) | 425 | 758 | 425 | 434 | 408 |
+| peak memory, baseline tests (MB) | 425 | 758 | 425 | 434 | 408 |
 
 Noise: most values vary by less than 15% between rounds. These vary more and should not be read closely: MariaDB Q1 (±29%), the lookup times with the round trip removed (up to ±50%) and MariaDB's 8-thread lookups (±17%). Where two engines' ranges overlap, `results.txt` marks a tie (`~`) instead of a winner: PostgreSQL and MariaDB on single-row INSERT and UPDATE, and MariaDB and SQLite on the lookup without the round trip.
 
@@ -170,7 +170,7 @@ These comparisons use an earlier full run of this same harness with DuckDB 1.5.6
 * InnoDB's bulk-load path and a larger redo log, so MariaDB loads through its fastest path like the others.
 * A start-of-month expression for MariaDB without string functions, `DATE_ADD(LAST_DAY(d - INTERVAL 1 MONTH), INTERVAL 1 DAY)`, instead of `DATE_FORMAT`.
 * Current releases of every engine and library (version 1 had PostgreSQL 16, MariaDB 11.8, ClickHouse 25.8, DuckDB 1.5).
-* Byte-order text in every engine, io_uring available in every container, exactly 2 GiB for every engine, and each engine's peak memory measured.
+* Byte-order text in every engine, io_uring available in every container, the same 2 GiB budget for every engine (a hard cap for the containers only), and each engine's baseline peak memory measured.
 * New: the file-analytics test, with relative-speed tables in the style of [Small Datum](https://smalldatum.blogspot.com/).
 
 ## Run it

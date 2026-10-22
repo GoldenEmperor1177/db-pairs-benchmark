@@ -537,10 +537,7 @@ def ops(db, m):
     gc.collect()
     m["batch_rows_s"] = st.median(10000 / clock(db.insn, a, a + 10000)[0] for a in (1, 10001, 20001))
     m["insert"] = lat(db.ins1, range(30001, 30301))
-    try:
-        m["update"] = lat(db.upd1, r.sample(range(1, 30001), db.update_n))
-    except Exception as e:                       # an engine that cannot update a single row by key
-        m["update"], m["update_error"] = None, " ".join(str(e).split())[:120]
+    m["update"] = lat(db.upd1, r.sample(range(1, 30001), db.update_n))
     db.x("DROP TABLE scratch")
 
 
@@ -877,7 +874,7 @@ def spec(counts):
          f"products {counts['products']:,}, orders {counts['orders']:,}",
          "           orders(id, customer_id, product_id, qty 1-5, amount, status, created_at over 3 years); amount = price x qty",
          "           status mix: 50% paid, 17% shipped, 17% refunded, 17% cancelled",
-         f"fairness   every engine: 2 physical cores = {THREADS} threads, {MEM_GB} GiB RAM, no swap, 1 GiB main cache",
+         f"fairness   every engine: 2 physical cores = {THREADS} threads, {MEM_GB} GiB RAM budget (a hard cap for containers only), no swap, 1 GiB main cache",
          f"           CPUs {cpus(CPU_A)}: PostgreSQL, MariaDB, SQLite; CPUs {cpus(CPU_B)}: ClickHouse, DuckDB; "
          f"CPUs {cpus(CPU_CLIENT)}: the Python client for server engines",
          "           containers: cpuset + memory limit from the container runtime; DuckDB: threads=4, memory_limit=2GiB; "
@@ -899,7 +896,7 @@ def spec(counts):
           "  concurrency    8 threads x 100 random point lookups, one connection per thread; total lookups per second",
           "  single INSERT  300 one-row INSERTs, one transaction each (default durability); per second and p95",
           "  batch INSERT   3 statements each inserting 10,000 rows; median rows per second",
-          "  single UPDATE  200 one-row UPDATEs by primary key (ClickHouse: 30, as mutations); n/a where the engine cannot",
+          "  single UPDATE  200 one-row UPDATEs by primary key (ClickHouse: 30, as mutations)",
           "           per pair (section 2), in every round:",
           "  warm-up        the 4 queries once on the source (untimed), because its container was just started",
           "  full copy      every table copied from source to target with INSERT/CREATE TABLE ... SELECT; time per table",
@@ -939,7 +936,7 @@ def caps_table(limits):
     got = {e: (cs, mem, swp) for e, cs, mem, swp in limits}
     cores = lambda c: f"{len(c) // 2} cores / {len(c)} threads"
     col = {e: [got[e][0] + " (container)", cores(CPUS[e]), got[e][1] + " (container)", got[e][2]] for e in SVC}
-    col["duckdb"] = [cpus(CPU_B) + " (pinned)", cores(CPU_B), f"{MEM_GB} GiB (memory_limit)", "n/a, in-process"]
+    col["duckdb"] = [cpus(CPU_B) + " (pinned)", cores(CPU_B), f"{MEM_GB} GiB (buffers only)", "n/a, in-process"]
     col["sqlite"] = [cpus(CPU_A) + " (pinned)", cores(CPU_A), "no hard cap", "n/a, in-process"]
     col["client"] = [cpus(CPU_CLIENT) + " (pinned)", cores(CPU_CLIENT), "-", "-"]
     per_query = {"postgres": f"{THREADS} (parallel workers)", "mariadb": "1 (by design)", "clickhouse": f"{THREADS} (max_threads)",
@@ -955,10 +952,12 @@ def caps_table(limits):
     rows += [("threads per query", [per_query[e] for e in order], "{}", None),
              ("main cache", [cache[e] for e in order], "{}", None),
              ("io_uring", [io[e] for e in order], "{}", None)]
-    return mat("COMPUTE CAPS (the same budget for every engine)", names, rows, first="cap") + [
+    return mat("COMPUTE CAPS (the same nominal budget for every engine)", names, rows, first="cap") + [
         "Each CPU set is two whole physical cores (all their threads), read from the machine's layout.",
         "The client column applies while a server is measured. Embedded engines run inside the client process,",
-        "which is then pinned to the engine's own CPUs."]
+        "which is then pinned to the engine's own CPUs.",
+        "RAM is a hard cap only for the containers. DuckDB's memory_limit covers its buffer manager,",
+        "not the whole process, and SQLite has no cap, so peak memory is measured for every engine."]
 
 
 def report(base, pairs, files, counts, problems, limits):
@@ -966,7 +965,7 @@ def report(base, pairs, files, counts, problems, limits):
          "orders     " + f"{counts['orders']:,} orders, {counts['customers']:,} customers, {counts['products']:,} products; "
          f"{ROUNDS} rounds, {RUNS} warm runs per query per round"]
     o += env_lines([base[e][0]["version"] for e in ENGINES])
-    o += ["caps       every engine: 2 physical cores (4 threads) and 2 GiB RAM, no swap - full table below",
+    o += ["caps       every engine: 2 physical cores (4 threads) and a 2 GiB RAM budget, no swap; a hard RAM cap for the containers only - full table below",
           "reading    median of the rounds ±half range; * clear winner, ~ tie within noise (details below)"]
     host_swap = sum(m["swap"] for e in ENGINES for m in base[e]) + sum(P["swap"] for Ps in pairs.values() for P in Ps) + \
         sum(F["swap"] for F in files)
@@ -988,13 +987,13 @@ def report(base, pairs, files, counts, problems, limits):
 
     cols = [TITLE[e] for e in ENGINES]
     g = lambda f: [[f(m) for m in base[e]] for e in ENGINES]
-    upd = lambda m: m["update"]["ops"] if m.get("update") else None
+    upd = lambda m: m["update"]["ops"]
     o += mat("1. BASELINE - each engine on its own", cols, [
         ("bulk load, all tables (s)", g(lambda m: m["load_s"]), "{:.2f}", True),
         ("bulk load (rows/s)", g(lambda m: m["load_rows_s"]), "{:,.0f}", False),
         ("index / PK build (s)", g(lambda m: m["index_s"]), "{:.2f}", True),
         ("size of the 3 tables (MB)", g(lambda m: m["size_mb"]), "{:.0f}", True),
-        ("peak memory used (MB, cap 2,147)", g(lambda m: m.get("peak_mb")), "{:,.0f}", None)])
+        ("peak memory, baseline tests (MB)", g(lambda m: m.get("peak_mb")), "{:,.0f}", None)])
     o += ["peak memory: containers = cgroup memory.peak during the test (includes their page cache); DuckDB and SQLite ="
           " peak resident memory of the Python process during the test (includes the Python client itself)"]
     o += mat("1a. analytic queries, median ms", cols,
@@ -1034,8 +1033,6 @@ def report(base, pairs, files, counts, problems, limits):
               ("10,000-row INSERT", rel(lambda m: m["batch_rows_s"], True), "{:.2f}", None),
               ("single-row UPDATE by PK", rel(upd, True), "{:.2f}", None),
               ("bulk load", rel(lambda m: m["load_s"], False), "{:.2f}", None)], first="test")
-    o += [f"{TITLE[e]}: single-row UPDATE failed, so it shows n/a: {base[e][0]['update_error']}"
-          for e in ENGINES if base[e][0].get("update_error")]
 
     o += ["", "2. PAIRS - data moves from a source database to a target database", ""]
     for (s, k), Ps in pairs.items():
@@ -1164,8 +1161,6 @@ def metrics(m):
         if m.get(key):
             out += [(name, "median", m[key]["med"], "ms"), (name, "p95", m[key]["p95"], "ms"),
                     (name, "throughput", m[key]["ops"], "per s")]
-    if m.get("update_error"):
-        out.append(("single-row update", "not supported", m["update_error"], "error"))
     return out
 
 
